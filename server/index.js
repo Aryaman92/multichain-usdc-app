@@ -3,7 +3,6 @@ import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import { connectDB } from "./db.js";
-
 import authRoutes from "./routes/auth.js";
 import faucetRoutes from "./routes/faucet.js";
 import transactionRoutes from "./routes/transactions.js";
@@ -13,6 +12,8 @@ import reconciliationRoutes from "./routes/reconciliation.js";
 const app = express();
 
 const PORT = process.env.PORT || 4000;
+const CLIENT_ORIGIN =
+  process.env.CLIENT_ORIGIN || "http://localhost:3000";
 
 app.use(
   cors({
@@ -21,14 +22,18 @@ app.use(
         return callback(null, true);
       }
 
-      const allowed =
+      const isLocal =
         /^http:\/\/localhost:\d+$/.test(origin) ||
         /^http:\/\/127\.0\.0\.1:\d+$/.test(origin);
 
-      if (allowed) {
+      const isProductionFrontend =
+        origin === CLIENT_ORIGIN;
+
+      if (isLocal || isProductionFrontend) {
         return callback(null, true);
       }
 
+      console.log("Blocked by CORS:", origin);
       return callback(new Error("Not allowed by CORS"));
     },
 
@@ -40,7 +45,9 @@ app.use(express.json());
 app.use(cookieParser());
 
 app.get("/api/health", (req, res) => {
-  res.json({ ok: true });
+  res.json({
+    ok: true,
+  });
 });
 
 app.use("/api/auth", authRoutes);
@@ -49,10 +56,13 @@ app.use("/api/transactions", transactionRoutes);
 app.use("/api/bridges", bridgeRoutes);
 app.use("/api/reconciliation", reconciliationRoutes);
 
-app.listen(PORT, () => {
-  console.log(`API listening on http://localhost:${PORT}`);
-});
-
-connectDB().catch((err) => {
-  console.error("MongoDB connection failed:", err.message);
-});
+connectDB()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error("Database connection failed:", err);
+    process.exit(1);
+  });
