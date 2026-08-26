@@ -2,10 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { useAccount, useWatchContractEvent } from "wagmi";
-import { erc20Abi, USDC_ADDRESSES, USDC_DECIMALS } from "@/lib/erc20";
+import { erc20Abi, USDC_ADDRESSES } from "@/lib/erc20";
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+
+const CHAIN_NAMES: Record<number, string> = {
+  11155111: "Ethereum Sepolia",
+  84532: "Base Sepolia",
+  43113: "Avalanche Fuji",
+  5042002: "Arc Testnet",
+};
 
 type TransferEntry = {
   type: "transfer";
@@ -14,9 +21,12 @@ type TransferEntry = {
   amount: string;
   counterparty: string;
   txHash: string;
+  chainId: number;
+  chainName: string;
   status?: "pending" | "success" | "failed";
   symbol?: string;
   verifiedOnChain?: boolean;
+  createdAt?: string;
 };
 
 type BridgeEntry = {
@@ -30,6 +40,7 @@ type BridgeEntry = {
   sourceTxHash?: string | null;
   destinationTxHash?: string | null;
   reconciled?: boolean;
+  createdAt?: string;
 };
 
 type Entry = TransferEntry | BridgeEntry;
@@ -41,78 +52,109 @@ export function LedgerFeed() {
   const [verifying, setVerifying] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const usdcAddress = chainId ? USDC_ADDRESSES[chainId] : undefined;
+  const usdcAddress = chainId
+    ? USDC_ADDRESSES[chainId]
+    : undefined;
 
   async function loadHistory() {
-    if (!address || !chainId) return;
+    if (!address) return;
 
     setLoading(true);
 
     try {
-      const [transactionsResponse, bridgesResponse] = await Promise.all([
-        fetch(`${API_URL}/api/transactions/${address}`),
-        fetch(`${API_URL}/api/bridges/${address}`),
-      ]);
+      const [transactionsResponse, bridgesResponse] =
+        await Promise.all([
+          fetch(`${API_URL}/api/transactions/${address}`),
+          fetch(`${API_URL}/api/bridges/${address}`),
+        ]);
 
-      const transactionsData = await transactionsResponse.json();
-      const bridgesData = await bridgesResponse.json();
+      const transactionsData =
+        await transactionsResponse.json();
+
+      const bridgesData =
+        await bridgesResponse.json();
 
       const transfers: TransferEntry[] = (
         transactionsData.transactions ?? []
-      )
-        .filter((tx: any) => tx.chainId === chainId)
-        .map((tx: any) => {
-          const incoming =
-            tx.recipient.toLowerCase() === address.toLowerCase();
+      ).map((tx: any) => {
+        const incoming =
+          tx.recipient?.toLowerCase() ===
+          address.toLowerCase();
 
-          return {
-            type: "transfer",
-            id: tx.hash,
-            direction: incoming ? "in" : "out",
-            amount: tx.amount,
-            counterparty: incoming ? tx.sender : tx.recipient,
-            txHash: tx.hash,
-            status: tx.status,
-            symbol: tx.symbol ?? "USDC",
-            verifiedOnChain: tx.verifiedOnChain ?? false,
-          };
-        });
+        return {
+          type: "transfer",
+          id: tx.hash,
+          direction: incoming ? "in" : "out",
+          amount: tx.amount,
+          counterparty: incoming
+            ? tx.sender
+            : tx.recipient,
+          txHash: tx.hash,
+          chainId: tx.chainId,
+          chainName:
+            CHAIN_NAMES[tx.chainId] ??
+            `Chain ${tx.chainId}`,
+          status: tx.status,
+          symbol: tx.symbol ?? "USDC",
+          verifiedOnChain:
+            tx.verifiedOnChain ?? false,
+          createdAt: tx.createdAt,
+        };
+      });
 
-      const bridges: BridgeEntry[] = (bridgesData.bridges ?? [])
-        .filter(
-          (bridge: any) =>
-            bridge.sourceChainId === chainId ||
-            bridge.destinationChainId === chainId
-        )
-        .map((bridge: any) => ({
-          type: "bridge",
-          id: bridge._id,
-          amount: bridge.amount,
-          token: bridge.token ?? "USDC",
-          sourceChain: bridge.sourceChain,
-          destinationChain: bridge.destinationChain,
-          status: bridge.status,
-          sourceTxHash: bridge.sourceTxHash,
-          destinationTxHash: bridge.destinationTxHash,
-          reconciled: bridge.reconciled ?? false,
-        }));
+      const bridges: BridgeEntry[] = (
+        bridgesData.bridges ?? []
+      ).map((bridge: any) => ({
+        type: "bridge",
+        id: bridge._id,
+        amount: bridge.amount,
+        token: bridge.token ?? "USDC",
+        sourceChain: bridge.sourceChain,
+        destinationChain:
+          bridge.destinationChain,
+        status: bridge.status,
+        sourceTxHash: bridge.sourceTxHash,
+        destinationTxHash:
+          bridge.destinationTxHash,
+        reconciled:
+          bridge.reconciled ?? false,
+        createdAt: bridge.createdAt,
+      }));
 
-      setEntries([...bridges, ...transfers]);
+      const allEntries: Entry[] = [
+        ...bridges,
+        ...transfers,
+      ].sort((a, b) => {
+        const aTime = a.createdAt
+          ? new Date(a.createdAt).getTime()
+          : 0;
+
+        const bTime = b.createdAt
+          ? new Date(b.createdAt).getTime()
+          : 0;
+
+        return bTime - aTime;
+      });
+
+      setEntries(allEntries);
     } catch (err) {
-      console.error("Could not load activity:", err);
+      console.error(
+        "Could not load transaction history:",
+        err
+      );
     } finally {
       setLoading(false);
     }
   }
 
-  async function verifyTransaction(entry: TransferEntry) {
-    if (!chainId) return;
-
+  async function verifyTransaction(
+    entry: TransferEntry
+  ) {
     setVerifying(entry.txHash);
 
     try {
       await fetch(
-        `${API_URL}/api/transactions/verify/${chainId}/${entry.txHash}`
+        `${API_URL}/api/transactions/verify/${entry.chainId}/${entry.txHash}`
       );
 
       await loadHistory();
@@ -123,19 +165,23 @@ export function LedgerFeed() {
 
   useEffect(() => {
     loadHistory().catch(() => {});
-  }, [address, chainId]);
+  }, [address]);
 
   useWatchContractEvent({
     address: usdcAddress,
     abi: erc20Abi,
     eventName: "Transfer",
-    enabled: Boolean(usdcAddress && address),
+    enabled: Boolean(
+      usdcAddress && address
+    ),
 
     onLogs(logs) {
       const relevant = logs.filter(
         (log) =>
-          log.args.from?.toLowerCase() === address?.toLowerCase() ||
-          log.args.to?.toLowerCase() === address?.toLowerCase()
+          log.args.from?.toLowerCase() ===
+            address?.toLowerCase() ||
+          log.args.to?.toLowerCase() ===
+            address?.toLowerCase()
       );
 
       if (relevant.length) {
@@ -151,11 +197,12 @@ export function LedgerFeed() {
       <div className="flex items-baseline justify-between mb-4">
         <div>
           <h2 className="font-display font-medium text-ivory">
-            Activity
+            Transaction History
           </h2>
 
           <p className="text-xs text-muted mt-1">
-            Transfers and bridge activity linked to your wallet.
+            Complete transfer and bridge history
+            across all supported networks.
           </p>
         </div>
 
@@ -164,7 +211,9 @@ export function LedgerFeed() {
           disabled={loading}
           className="text-xs font-mono text-brass uppercase tracking-wide disabled:opacity-50"
         >
-          {loading ? "Loading..." : "Refresh"}
+          {loading
+            ? "Loading..."
+            : "Refresh"}
         </button>
       </div>
 
@@ -172,15 +221,18 @@ export function LedgerFeed() {
         {entries.length === 0 ? (
           <div className="px-6 py-10 text-center">
             <p className="text-muted text-sm">
-              No asset activity recorded yet.
+              No transaction history recorded yet.
             </p>
           </div>
         ) : (
-          <div className="max-h-96 overflow-y-auto ledger-scroll divide-y divide-border">
+          <div className="max-h-[600px] overflow-y-auto ledger-scroll divide-y divide-border">
             {entries.map((entry) => {
               if (entry.type === "bridge") {
                 return (
-                  <div key={entry.id} className="px-5 py-4">
+                  <div
+                    key={entry.id}
+                    className="px-5 py-4"
+                  >
                     <div className="flex items-center justify-between gap-4">
                       <div className="flex items-center gap-3">
                         <span className="font-mono text-xs px-2 py-1 rounded bg-violet/10 text-violet">
@@ -190,7 +242,11 @@ export function LedgerFeed() {
                         <div>
                           <p className="text-sm text-ivory">
                             {entry.sourceChain}
-                            <span className="text-muted mx-2">→</span>
+
+                            <span className="text-muted mx-2">
+                              →
+                            </span>
+
                             {entry.destinationChain}
                           </p>
 
@@ -201,7 +257,8 @@ export function LedgerFeed() {
                       </div>
 
                       <span className="font-mono text-ivory">
-                        {entry.amount} {entry.token}
+                        {entry.amount}{" "}
+                        {entry.token}
                       </span>
                     </div>
 
@@ -209,9 +266,11 @@ export function LedgerFeed() {
                       <div className="flex items-center gap-3 text-xs font-mono">
                         <span
                           className={
-                            entry.status === "success"
+                            entry.status ===
+                            "success"
                               ? "text-mint"
-                              : entry.status === "failed"
+                              : entry.status ===
+                                "failed"
                               ? "text-coral"
                               : "text-brass"
                           }
@@ -228,38 +287,80 @@ export function LedgerFeed() {
 
                       {entry.sourceTxHash && (
                         <span className="text-xs font-mono text-muted">
-                          {entry.sourceTxHash.slice(0, 10)}…
-                          {entry.sourceTxHash.slice(-6)}
+                          {entry.sourceTxHash.slice(
+                            0,
+                            10
+                          )}
+                          …
+                          {entry.sourceTxHash.slice(
+                            -6
+                          )}
                         </span>
                       )}
                     </div>
+
+                    {entry.createdAt && (
+                      <p className="mt-2 text-[10px] font-mono text-muted">
+                        {new Date(
+                          entry.createdAt
+                        ).toLocaleString()}
+                      </p>
+                    )}
                   </div>
                 );
               }
 
               return (
-                <div key={entry.id} className="px-5 py-4">
-                  <div className="flex items-center justify-between">
+                <div
+                  key={entry.id}
+                  className="px-5 py-4"
+                >
+                  <div className="flex items-center justify-between gap-4">
                     <div className="flex items-center gap-3">
                       <span
                         className={`font-mono text-xs px-2 py-1 rounded ${
-                          entry.direction === "in"
+                          entry.direction ===
+                          "in"
                             ? "bg-mint/10 text-mint"
                             : "bg-coral/10 text-coral"
                         }`}
                       >
-                        {entry.direction === "in" ? "IN" : "OUT"}
+                        {entry.direction ===
+                        "in"
+                          ? "IN"
+                          : "OUT"}
                       </span>
 
-                      <span className="font-mono text-muted text-xs">
-                        {entry.counterparty.slice(0, 6)}…
-                        {entry.counterparty.slice(-4)}
-                      </span>
+                      <div>
+                        <p className="text-xs font-mono text-ivory">
+                          {entry.chainName}
+                        </p>
+
+                        <p className="font-mono text-muted text-xs mt-1">
+                          {entry.counterparty?.slice(
+                            0,
+                            6
+                          )}
+                          …
+                          {entry.counterparty?.slice(
+                            -4
+                          )}
+                        </p>
+                      </div>
                     </div>
 
-                    <span className="font-mono text-ivory">
-                      {entry.direction === "in" ? "+" : "−"}
-                      {entry.amount} {entry.symbol}
+                    <span
+                      className={`font-mono ${
+                        entry.direction === "in"
+                          ? "text-mint"
+                          : "text-ivory"
+                      }`}
+                    >
+                      {entry.direction === "in"
+                        ? "+"
+                        : "−"}
+                      {entry.amount}{" "}
+                      {entry.symbol}
                     </span>
                   </div>
 
@@ -267,14 +368,17 @@ export function LedgerFeed() {
                     <div className="flex items-center gap-3 text-xs font-mono">
                       <span
                         className={
-                          entry.status === "success"
+                          entry.status ===
+                          "success"
                             ? "text-mint"
-                            : entry.status === "failed"
+                            : entry.status ===
+                              "failed"
                             ? "text-coral"
                             : "text-brass"
                         }
                       >
-                        {entry.status ?? "success"}
+                        {entry.status ??
+                          "success"}
                       </span>
 
                       {entry.verifiedOnChain ? (
@@ -283,11 +387,19 @@ export function LedgerFeed() {
                         </span>
                       ) : (
                         <button
-                          onClick={() => verifyTransaction(entry)}
-                          disabled={verifying === entry.txHash}
+                          onClick={() =>
+                            verifyTransaction(
+                              entry
+                            )
+                          }
+                          disabled={
+                            verifying ===
+                            entry.txHash
+                          }
                           className="text-brass disabled:opacity-50"
                         >
-                          {verifying === entry.txHash
+                          {verifying ===
+                          entry.txHash
                             ? "Verifying..."
                             : "Verify on-chain"}
                         </button>
@@ -295,10 +407,24 @@ export function LedgerFeed() {
                     </div>
 
                     <span className="text-xs font-mono text-muted">
-                      {entry.txHash.slice(0, 10)}…
-                      {entry.txHash.slice(-6)}
+                      {entry.txHash.slice(
+                        0,
+                        10
+                      )}
+                      …
+                      {entry.txHash.slice(
+                        -6
+                      )}
                     </span>
                   </div>
+
+                  {entry.createdAt && (
+                    <p className="mt-2 text-[10px] font-mono text-muted">
+                      {new Date(
+                        entry.createdAt
+                      ).toLocaleString()}
+                    </p>
+                  )}
                 </div>
               );
             })}
