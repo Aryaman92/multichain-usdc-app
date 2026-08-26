@@ -1,0 +1,36 @@
+{
+  "name": "multichain-usdc-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@circle-fin/adapter-viem-v2": "^1.13.0",
+    "@circle-fin/bridge-kit": "^1.13.0",
+    "@metamask/connect-evm": "^2.1.1",
+    "@reown/appkit": "1.8.23",
+    "@reown/appkit-adapter-wagmi": "1.8.23",
+    "@tanstack/react-query": "^5.59.0",
+    "@walletconnect/ethereum-provider": "^2.23.10",
+    "@x402/evm": "^2.22.0",
+    "@x402/svm": "^2.22.0",
+    "next": "15.0.7",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "viem": "^2.55.19",
+    "wagmi": "^3.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.14",
+    "typescript": "^5"
+  }
+}
